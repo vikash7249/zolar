@@ -193,7 +193,7 @@ const Sidebar = ({active,onNav,collapsed,unread}) => (
 );
 
 // ── TOPBAR ───────────────────────────────────────────────────
-const TopBar = ({title,onToggle,notifs,onNotif,onSearch,user,onProfile}) => {
+const TopBar = ({title,onToggle,notifs,onNotif,onSearch,user,onProfile,onLogout}) => {
   const unread=notifs.filter(n=>!n.read).length;
   return <div style={{height:58,background:"rgba(13,17,23,0.97)",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",padding:"0 18px",gap:14,flexShrink:0,backdropFilter:"blur(10px)"}}>
     <button onClick={onToggle} style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:8,width:32,height:32,cursor:"pointer",color:"#64748b",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>☰</button>
@@ -213,6 +213,9 @@ const TopBar = ({title,onToggle,notifs,onNotif,onSearch,user,onProfile}) => {
         <div style={{fontSize:12,fontWeight:600,color:"#e2e8f0"}}>{user?.name||"Alex Morgan"}</div>
         <div style={{fontSize:10,color:"#06b6d4"}}>✎ Edit Profile</div>
       </div>
+      <button onClick={onLogout} style={{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:8,padding:"6px 12px",color:"#ef4444",fontSize:12,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontWeight:600}}>
+        Logout
+      </button>
     </div>
   </div>;
 };
@@ -1131,16 +1134,25 @@ const LoginPage = ({onLogin, users}) => {
 
   const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-  // Direct login — no OTP needed
+  // Real backend login
   const handleLogin = async () => {
     setErr(""); setLoading(true);
-    await new Promise(r => setTimeout(r, 700));
-    const found = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (!found) { setErr("❌ No account found with this email."); setLoading(false); return; }
-    if (found.status === "pending_setup") { setErr("⚠️ Account setup pending. Please check your email for the setup link."); setLoading(false); return; }
-    if (!pw || pw.length < 4) { setErr("Please enter your password."); setLoading(false); return; }
-    if (found.password && found.password !== pw) { setErr("❌ Incorrect password. Please try again."); setLoading(false); return; }
-    onLogin(found);
+    if (!email || !pw) { setErr("Email aur password daalo."); setLoading(false); return; }
+    try {
+      const response = await fetch('http://65.2.188.116:5000/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: pw })
+      });
+      const data = await response.json();
+      if (data.accessToken) {
+        onLogin(data);
+      } else {
+        setErr(data.error || '❌ Email ya password galat hai');
+      }
+    } catch(e) {
+      setErr('❌ Server se connect nahi ho pa raha');
+    }
     setLoading(false);
   };
 
@@ -1413,8 +1425,15 @@ const SetupPage = ({setupUser, onComplete}) => {
 };
 
 // ── MAIN APP ──────────────────────────────────────────────────
+const API = 'http://65.2.188.116:5000/api';
+const getToken = () => localStorage.getItem('zolar_token');
+
 export default function ZolarApp() {
-  const [screen,setScreen] = useState("login"); // login | setup | app
+  // Refresh par bhi logged in rahe
+  const savedUser = (() => { try { const u=localStorage.getItem('zolar_user'); return u?JSON.parse(u):null; } catch{return null;} })();
+  const savedToken = localStorage.getItem('zolar_token');
+
+  const [screen,setScreen] = useState(savedUser&&savedToken?"app":"login");
   const [setupUser,setSetupUser] = useState(null);
   const [activeNav,setActiveNav] = useState("dashboard");
   const [collapsed,setCollapsed] = useState(false);
@@ -1427,7 +1446,7 @@ export default function ZolarApp() {
   const [users,setUsers] = useState(INIT_USERS);
   const [notifs,setNotifs] = useState(INIT_NOTIFS);
   const [events,setEvents] = useState(INIT_EVENTS);
-  const [currentUser,setCurrentUser] = useState(null);
+  const [currentUser,setCurrentUser] = useState(savedUser||null);
 
   // Modals
   const [showNewProj,setShowNewProj] = useState(false);
@@ -1441,9 +1460,24 @@ export default function ZolarApp() {
   const addNotif = n => setNotifs(p=>[{id:uid(),read:false,time:"Just now",...n},...p]);
 
   const handleLogin = user => {
-    const full = users.find(u=>u.id===user.id) || users.find(u=>u.email===user.email) || {...user};
+    // Token localStorage mein save karo
+    if(user.accessToken) {
+      localStorage.setItem('zolar_token', user.accessToken);
+      localStorage.setItem('zolar_refresh', user.refreshToken||'');
+      localStorage.setItem('zolar_user', JSON.stringify(user.user||user));
+    }
+    const full = user.user || users.find(u=>u.id===user.id) || users.find(u=>u.email===user.email) || {...user};
     setCurrentUser(full);
     setScreen("app");
+  };
+
+  // Logout function
+  const handleLogout = () => {
+    localStorage.removeItem('zolar_token');
+    localStorage.removeItem('zolar_refresh');
+    localStorage.removeItem('zolar_user');
+    setCurrentUser(null);
+    setScreen("login");
   };
 
   const handleSetupComplete = data => {
@@ -1521,6 +1555,7 @@ export default function ZolarApp() {
           onSearch={()=>{}}
           user={currentUser}
           onProfile={()=>setShowProfile(true)}
+          onLogout={handleLogout}
         />
         <div style={{flex:1,overflowY:"auto",animation:"fadeIn .3s ease"}}>{renderPage()}</div>
       </div>
